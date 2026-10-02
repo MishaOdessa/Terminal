@@ -1,3 +1,41 @@
 [gd_scene format=3 uid="uid://wm7ylm2wgehm"]
 
-[node name="Node2D" type="Node2D" unique_id=1182529968]
+[node name="Terminal" type="Control" unique_id=2068554775]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 1280.0
+offset_bottom = 720.0
+
+[node name="ColorRect" type="ColorRect" parent="." unique_id=2049645138]
+layout_mode = 0
+offset_right = 1280.0
+offset_bottom = 720.0
+color = Color(0.078431375, 0.078431375, 0.078431375, 1)
+
+[node name="MarginContainer" type="MarginContainer" parent="." unique_id=469021536]
+layout_mode = 0
+offset_right = 1280.0
+offset_bottom = 720.0
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginContainer" unique_id=1925270123]
+layout_mode = 2
+
+[node name="RichTextLabel" type="RichTextLabel" parent="MarginContainer/VBoxContainer" unique_id=1221075611]
+custom_minimum_size = Vector2(1200, 650)
+layout_mode = 2
+
+[node name="HBoxContainer" type="HBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=143659690]
+layout_mode = 2
+
+[node name="UserName" type="Label" parent="MarginContainer/VBoxContainer/HBoxContainer" unique_id=1244110522]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.03529412, 1, 0, 1)
+text = "misha@fedora:~$"
+
+[node name="cmd" type="LineEdit" parent="MarginContainer/VBoxContainer/HBoxContainer" unique_id=480425524]
+layout_mode = 2
+size_flags_horizontal = 3
