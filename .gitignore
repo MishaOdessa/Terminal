@@ -1,0 +1,6 @@
+.godot/
+*.translation
+*.cache*
+vkd3d-proton.cache.write
+.DS_Store
+Thumbs.db
