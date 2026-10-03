@@ -1,0 +1,6 @@
+# Скрипт с ошибкой
+cd dff
+clear
+ls dfd
+буй
+exit
