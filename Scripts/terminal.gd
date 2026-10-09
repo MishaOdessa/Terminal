@@ -10,6 +10,8 @@ var current_dir: String = "~"
 
 var vfs_path: String = ""
 var script_path: String = ""
+var zip_reader: ZIPReader = ZIPReader.new()
+var vfs_loaded: bool = false
 
 func get_system_os():
 	system_os = OS.get_name().to_lower()
@@ -46,10 +48,29 @@ func _ready() -> void:
 	cmd.text_submitted.connect(_on_cmd_text_submitted)
 	
 	parse_cli_args()
+	
+	#VFS запуск
+	if not vfs_path.is_empty():
+		load_vfs(vfs_path)
+	
 	# Если путь к скрипту передали, запускаем его
 	if not script_path.is_empty():
 		run_startup_script(script_path)
-	
+
+func load_vfs(path: String) -> void:
+	var err := zip_reader.open(path)
+	if DirAccess.dir_exists_absolute(path):
+		history.append_text("[VFS] file opened: " + path + "\n")                    
+		return
+	elif not DirAccess.dir_exists_absolute(path) and err != OK: 
+		history.append_text("[VFS ERROR] Archive file not found: " + path + "\n")                     
+		return
+	if err == OK:
+		vfs_loaded = true
+		history.append_text("[VFS] Archive successfully opened: " + path + "\n")
+	else:
+		history.append_text("[VFS ERROR] Error opening ZIP (code " + str(err) + "): " + path + "\n")
+
 func parse_cli_args() -> void:
 	# OS.get_cmdline_user_args() берет только параметры, переданные ПОСЛЕ разделителя '--'
 	var args := OS.get_cmdline_user_args()
@@ -143,6 +164,3 @@ func expand_env_vars(input_text: String) -> String:
 		result = result.replace(full_match, env_value)
 		
 	return result
-
-func _process(delta: float) -> void:
-	pass
