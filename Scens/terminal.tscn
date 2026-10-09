@@ -30,6 +30,7 @@ layout_mode = 2
 [node name="History" type="RichTextLabel" parent="MarginContainer/VBoxContainer" unique_id=1221075611]
 custom_minimum_size = Vector2(1200, 650)
 layout_mode = 2
+scroll_following_visible_characters = true
 
 [node name="HBoxContainer" type="HBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=143659690]
 layout_mode = 2
