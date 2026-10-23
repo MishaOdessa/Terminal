@@ -143,13 +143,197 @@ func execute_command(parts: Array):
 		"exit":
 			get_tree().quit()
 		"cd":
-			history.append_text("cd " + str(args) + "\n")
+			#history.append_text("cd " + str(args) + "\n")
+			execute_cd(args)
 		"ls":
-			history.append_text("ls " + str(args) + "\n")
+			execute_ls(args)
+			#history.append_text("ls " + str(args) + "\n")
 		_:
 			history.append_text("bash: " + command + ": command not found\n")
 			return false
 	return true
+
+func execute_cd(args: Array) -> bool:
+	var folder_name: String = args[0]
+	
+	# 1. Сначала обрабатываем выход на уровень вверх (cd ..)
+	if folder_name == "..":
+		if current_dir == "~":
+			# Выше корня (~/ архива) идти некуда
+			return false
+		
+		var split_dir = Array(current_dir.split("/", false))
+		if split_dir.size() > 0:
+			split_dir.remove_at(split_dir.size() - 1)
+			current_dir = "/".join(split_dir)
+			
+		# Если после удаления ничего не осталось, возвращаем ~
+		if current_dir == "":
+			current_dir = "~"
+			
+		update_prompt()
+		return true
+
+	# 2. Обработка обычного перехода в папку
+	var target_zip_prefix: String = ""
+	if current_dir == "~":
+		target_zip_prefix = folder_name + "/"
+	else:
+		var clean_dir = current_dir.trim_prefix("~/")
+		target_zip_prefix = clean_dir + "/" + folder_name + "/"
+	
+	# Проверяем, существует ли такая папка в архиве
+	if is_vfs_dir(target_zip_prefix):
+		if current_dir == "~":
+			current_dir = "~/" + folder_name
+		else:
+			current_dir = current_dir + "/" + folder_name
+			
+		update_prompt()
+		return true
+	else:
+		history.append_text("cd: no such file or directory: " + folder_name + "\n")
+		return false
+func execute_ls(args: Array) -> void:
+	# Разобьем аргументы на флаги (все, что начинается с '-') и возможные пути
+	var show_all: bool = false       # -a
+	var long_format: bool = false    # -l
+	var human_readable: bool = false # -h
+	
+	for arg in args:
+		if arg.begins_with("-"):
+			if "a" in arg: show_all = true
+			if "l" in arg: long_format = true
+			if "h" in arg: human_readable = true
+	
+	var files: PackedStringArray = zip_reader.get_files()
+	
+	var current_parts: Array = []
+	if current_dir != "~":
+		current_parts = Array(current_dir.trim_prefix("~/").split("/", false))
+	
+	var current_depth: int = current_parts.size()
+	var results: Array = []
+	
+	# Собираем элементы текущего уровня
+	for file_path in files:
+		var file_parts: Array = Array(file_path.split("/", false))
+		
+		if file_parts.size() == current_depth + 1:
+			var match_prefix: bool = true
+			for i in range(current_depth):
+				if file_parts[i] != current_parts[i]:
+					match_prefix = false
+					break
+			
+			if match_prefix:
+				var item_name = file_parts[file_parts.size() - 1]
+				
+				# Если нет флага -a, пропускаем файлы/папки, начинающиеся с точки
+				if not show_all and item_name.begins_with("."):
+					continue
+					
+				if not item_name in results:
+					results.append(item_name)
+	
+	if results.is_empty():
+		return
+		
+	results.sort()
+	
+	# Вывод результата
+	var output_string: String = ""
+	
+	for item in results:
+		var full_item_path = ""
+		if current_dir == "~":
+			full_item_path = item
+		else:
+			full_item_path = current_dir.trim_prefix("~/") + "/" + item
+			
+		var is_dir = false
+		# Если это директория, в архиве может быть запись с слэшем на конце
+		if zip_reader.file_exists(full_item_path + "/"):
+			is_dir = true
+		
+		if long_format:
+			var type_char = "d" if is_dir else "-"
+			var permissions = type_char + "rwxr-xr-x" if is_dir else type_char + "rw-r--r--"
+			var size_str = "0"
+			
+			var date_str = get_file_real_time(full_item_path)
+			
+			if is_dir:
+				var folder_size = 0
+				var prefix_to_match = full_item_path + "/"
+				for f in zip_reader.get_files():
+					if f.begins_with(prefix_to_match):
+						var content = zip_reader.read_file(f)
+						if content.size() > 0:
+							folder_size += content.size()
+				
+				if folder_size > 0:
+					if human_readable:
+						size_str = format_human_size(folder_size)
+					else:
+						size_str = str(folder_size)
+			else:
+				# Безопасно получаем размер файла через read_file().size()
+				var content = zip_reader.read_file(full_item_path)
+				var real_size = content.size()
+				
+				if human_readable:
+					size_str = format_human_size(real_size)
+				else:
+					size_str = str(real_size)
+					
+			output_string += "%s  1 %s %s  %s %s %s\n" % [permissions, username, username, size_str.lpad(6), date_str, item]
+		else:
+			output_string += item + "  "
+
+	# Если это обычный ls (без -l), добавляем перевод строки в самом конце
+	if not long_format:
+		output_string += "\n"
+
+	history.append_text(output_string)
+
+# Вспомогательная функция для -h (перевод байтов в читаемый вид)
+func format_human_size(bytes: int) -> String:
+	if bytes < 1024:
+		return str(bytes) + "B"
+	elif bytes < 1024 * 1024:
+		return "%.1fK" % (bytes / 1024.0)
+	else:
+		return "%.1fM" % (bytes / (1024.0 * 1024.0))
+	
+# Функция для получения форматированной даты файла
+func get_file_real_time(full_item_path: String) -> String:
+	# Путь к файлу на диске (если ты распаковываешь архив в user://vfs/)
+	var disk_path = "user://vfs/" + full_item_path
+	
+	if FileAccess.file_exists(disk_path) or DirAccess.dir_exists_absolute(disk_path):
+		var mod_time = FileAccess.get_modified_time(disk_path)
+		var dt = Time.get_datetime_dict_from_unix_time(mod_time)
+		
+		var months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+		var month_str = months[dt["month"]]
+		var day_str = str(dt["day"]).lpad(2, " ")
+		var hour_str = str(dt["hour"]).lpad(2, "0")
+		var minute_str = str(dt["minute"]).lpad(2, "0")
+		
+		return "%s %s %s:%s" % [month_str, day_str, hour_str, minute_str]
+	
+	# Запасной вариант, если файла нет на диске
+	return "Jan 1  00:00"
+	
+
+func is_vfs_dir(target_zip_prefix: String) -> bool:
+	var files: PackedStringArray = zip_reader.get_files()
+	for file_puth in files:
+		if file_puth.begins_with(target_zip_prefix):
+			return true
+			break
+	return false
 
 func expand_env_vars(input_text: String) -> String:
 	var regex := RegEx.new()
