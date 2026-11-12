@@ -148,10 +148,46 @@ func execute_command(parts: Array):
 		"ls":
 			execute_ls(args)
 			#history.append_text("ls " + str(args) + "\n")
+		"date":
+			execute_date()
+		"uptime":
+			execute_uptime()
+		"uname":
+			execute_uname(args)
 		_:
 			history.append_text("bash: " + command + ": command not found\n")
 			return false
 	return true
+
+func execute_date():
+	var dt = Time.get_datetime_dict_from_system()
+	# Можно собрать красивую строку вручную или выдать системную
+	var date_str = Time.get_datetime_string_from_system(false, true)
+	history.append_text(date_str + "\n")
+
+func execute_uptime():
+	var uptime_sec = int(Time.get_ticks_msec() / 1000)
+	var hours = int(uptime_sec / 3600)
+	var minutes = int((uptime_sec % 3600) / 60)
+	var seconds = uptime_sec % 60 
+	var uptime_output = "up %02d:%02d:%02d,  1 user,  load average: 0.00, 0.00, 0.00\n" % [hours, minutes, seconds]
+	history.append_text(uptime_output)
+
+func execute_uname(args):
+	var os: String = OS.get_name()
+	if args.has("-a") or args.has("--all"):
+		var hostname = OS.get_environment("HOSTNAME")
+		if hostname.is_empty():
+			hostname = OS.get_environment("COMPUTERNAME")
+		if hostname.is_empty():
+			hostname = "localhost"
+		var version = OS.get_version()
+		var distro = OS.get_distribution_name()
+		var kernel_info = ""
+		kernel_info = "%s %s %s.%s" % [os, hostname, version, OS.get_processor_name()]
+		history.append_text(kernel_info + "\n")
+	else:
+		history.append_text(os + "\n")
 
 func execute_cd(args: Array) -> bool:
 	var folder_name: String = args[0]
@@ -232,7 +268,6 @@ func execute_ls(args: Array) -> void:
 				# Если нет флага -a, пропускаем файлы/папки, начинающиеся с точки
 				if not show_all and item_name.begins_with("."):
 					continue
-					
 				if not item_name in results:
 					results.append(item_name)
 	
@@ -261,7 +296,7 @@ func execute_ls(args: Array) -> void:
 			var permissions = type_char + "rwxr-xr-x" if is_dir else type_char + "rw-r--r--"
 			var size_str = "0"
 			
-			var date_str = get_file_real_time(full_item_path)
+			var date_str = get_file_time()
 			
 			if is_dir:
 				var folder_size = 0
@@ -307,24 +342,20 @@ func format_human_size(bytes: int) -> String:
 		return "%.1fM" % (bytes / (1024.0 * 1024.0))
 	
 # Функция для получения форматированной даты файла
-func get_file_real_time(full_item_path: String) -> String:
-	# Путь к файлу на диске (если ты распаковываешь архив в user://vfs/)
-	var disk_path = "user://vfs/" + full_item_path
+func get_file_time() -> String:
+	if vfs_path.is_empty() or not FileAccess.file_exists(vfs_path):
+		return "Файл не найден"
 	
-	if FileAccess.file_exists(disk_path) or DirAccess.dir_exists_absolute(disk_path):
-		var mod_time = FileAccess.get_modified_time(disk_path)
-		var dt = Time.get_datetime_dict_from_unix_time(mod_time)
-		
-		var months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-		var month_str = months[dt["month"]]
-		var day_str = str(dt["day"]).lpad(2, " ")
-		var hour_str = str(dt["hour"]).lpad(2, "0")
-		var minute_str = str(dt["minute"]).lpad(2, "0")
-		
-		return "%s %s %s:%s" % [month_str, day_str, hour_str, minute_str]
+	# Получаем время создания (в Unix-формате, в секундах)
+	var unix_time: int = FileAccess.get_modified_time(vfs_path)
 	
-	# Запасной вариант, если файла нет на диске
-	return "Jan 1  00:00"
+	# Переводим секунды в читаемую дату и время (с учетом часового пояса)
+	var dt: Dictionary = Time.get_datetime_dict_from_unix_time(unix_time)
+	
+	return "%04d-%02d-%02d %02d:%02d:%02d" % [
+		dt.year, dt.month, dt.day,
+		dt.hour, dt.minute, dt.second
+	]
 	
 
 func is_vfs_dir(target_zip_prefix: String) -> bool:
