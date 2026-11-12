@@ -6,12 +6,96 @@ extends Control
 
 var system_os: String
 var username: String
+var groops: String
 var current_dir: String = "~"
+
+var known_users: Array = []
+var known_groups: Array = []
 
 var vfs_path: String = ""
 var script_path: String = ""
 var zip_reader: ZIPReader = ZIPReader.new()
 var vfs_loaded: bool = false
+
+var vfs_deleted: Dictionary = {}
+
+const COMMAND_HELP: Dictionary = {
+	"cd": "cd [dir]: change the current directory (.. goes up, no argument goes to ~)",
+	"chown": "chown [user][:group] file...: change file owner and group",
+	"clear": "clear: clear the terminal screen",
+	"date": "date: print the current date and time",
+	"exit": "exit: close the terminal",
+	"help": "help: show this list of commands",
+	"ls": "ls [-a] [-l] [-h]: list directory contents (-a hidden, -l long, -h human sizes)",
+	"rmdir": "rmdir dir...: remove empty directories",
+	"uname": "uname [-a]: print system information",
+	"uptime": "uptime: show how long the terminal has been running",
+}
+
+func get_live_files() -> Array:
+	var result: Array = []
+	for f in zip_reader.get_files():
+		if not is_path_deleted(f):
+			result.append(f)
+	return result
+
+func is_path_deleted(path: String) -> bool:
+	var p := path.trim_suffix("/")
+	while not p.is_empty():
+		if vfs_deleted.has(p):
+			return true
+		var idx := p.rfind("/")
+		if idx == -1:
+			break
+		p = p.substr(0, idx)
+	return false
+
+func is_vfs_dir_empty(path: String) -> bool:
+	var prefix := path + "/"
+	for f in get_live_files():
+		if f.begins_with(prefix) and f != prefix:
+			return false
+	return true
+
+class VFSNodeMeta:
+	var owner: String
+	var group: String
+	var mtime: int
+	func _init(o: String, g: String, t: int) -> void:
+		owner = o
+		group = g
+		mtime = t
+
+var vfs_meta: Dictionary = {}
+
+func get_default_mtime() -> int:
+	if vfs_path.is_empty() or not FileAccess.file_exists(vfs_path):
+		return int(Time.get_unix_time_from_system())
+	return FileAccess.get_modified_time(vfs_path)
+
+func get_node_meta(path: String) -> VFSNodeMeta:
+	if vfs_meta.has(path):
+		return vfs_meta[path]
+	return VFSNodeMeta.new(username, groops, get_default_mtime())
+
+# превращает аргумент пользователя в ключ архива относительно current_dir
+func resolve_vfs_path(name: String) -> String:
+	var base := "" if current_dir == "~" else current_dir.trim_prefix("~/")
+	var full := name if base.is_empty() else base + "/" + name
+	return full.trim_suffix("/")
+
+func format_time(unix_time: int) -> String:
+	# get_datetime_dict_from_unix_time даёт UTC, добавляем смещение пояса
+	var bias_sec: int = Time.get_time_zone_from_system().bias * 60
+	var dt: Dictionary = Time.get_datetime_dict_from_unix_time(unix_time + bias_sec)
+	return "%04d-%02d-%02d %02d:%02d:%02d" % [
+		dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second
+	]
+
+func vfs_node_exists(path: String) -> bool:
+	if is_path_deleted(path):
+		return false
+	return zip_reader.file_exists(path) or is_vfs_dir(path + "/")
 
 func get_system_os():
 	system_os = OS.get_name().to_lower()
@@ -35,6 +119,9 @@ func get_system_user():
 		username = OS.get_environment("USERNAME")
 	if username.is_empty():
 		username = "user"
+	groops = username
+	known_users = ["root", username]
+	known_groups = ["root", groops]
 
 func update_prompt() -> void:
 	user.text = username + "@" + system_os + ":" + current_dir + "$ "
@@ -154,9 +241,25 @@ func execute_command(parts: Array):
 			execute_uptime()
 		"uname":
 			execute_uname(args)
+		"chown":
+			execute_chown(args)
+		"rmdir":
+			execute_rmdir(args)
+		"help":
+			return execute_help(args)
 		_:
 			history.append_text("bash: " + command + ": command not found\n")
 			return false
+	return true
+
+
+func execute_help(args: Array) -> bool:
+	var names: Array = COMMAND_HELP.keys()
+	names.sort()
+	var output := ""
+	for name in names:
+		output += COMMAND_HELP[name] + "\n"
+	history.append_text(output)
 	return true
 
 func execute_date():
@@ -189,7 +292,79 @@ func execute_uname(args):
 	else:
 		history.append_text(os + "\n")
 
+
+func execute_rmdir(args: Array) -> bool:
+	if args.is_empty():
+		history.append_text("rmdir: missing operand\n")
+		return false
+
+	var ok := true
+	for target in args:
+		var path := resolve_vfs_path(target)
+		if not vfs_node_exists(path):
+			history.append_text("rmdir: failed to remove '%s': No such file or directory\n" % target)
+			ok = false
+			continue
+		if not is_vfs_dir(path + "/"):
+			history.append_text("rmdir: failed to remove '%s': Not a directory\n" % target)
+			ok = false
+			continue
+		if not is_vfs_dir_empty(path):
+			history.append_text("rmdir: failed to remove '%s': Directory not empty\n" % target)
+			ok = false
+			continue
+		vfs_deleted[path] = true
+		vfs_meta.erase(path)
+	return ok
+
+func execute_chown(args: Array):
+	if args.size() < 2:
+		history.append_text("chown: missing operand\n")
+		return false
+	var spec: String = args[0]
+	
+	var new_user: String = ""
+	var new_group: String = ""
+	if ":" in spec:
+		var parts = spec.split(":", true)
+		if parts[0] != "":
+			new_user = parts[0]
+		if parts.size() > 1 and parts[1] != "":
+			new_group = parts[1]
+	else:
+		new_user = spec
+		
+	if not new_user.is_empty() and not known_users.has(new_user):
+		history.append_text("chown: invalid user: '%s'\n" % spec)
+		return false
+	if not new_group.is_empty() and not known_groups.has(new_group):
+		history.append_text("chown: invalid group: '%s'\n" % spec)
+		return false
+	
+	var ok := true
+	for target in args.slice(1):
+		var path := resolve_vfs_path(target)
+		if not vfs_node_exists(path):
+			history.append_text("chown: cannot access '%s': No such file or directory\n" % target)
+			ok = false
+			continue
+
+		# берём текущие метаданные (или дефолтные) и меняем только заданное
+		var meta := get_node_meta(path)
+		if not new_user.is_empty():
+			meta.owner = new_user
+		if not new_group.is_empty():
+			meta.group = new_group
+		meta.mtime = int(Time.get_unix_time_from_system()) 
+		vfs_meta[path] = meta
+	return ok
+
 func execute_cd(args: Array) -> bool:
+	if args.is_empty():
+		current_dir = "~"
+		update_prompt()
+		return true
+		
 	var folder_name: String = args[0]
 	
 	# 1. Сначала обрабатываем выход на уровень вверх (cd ..)
@@ -230,6 +405,7 @@ func execute_cd(args: Array) -> bool:
 	else:
 		history.append_text("cd: no such file or directory: " + folder_name + "\n")
 		return false
+
 func execute_ls(args: Array) -> void:
 	# Разобьем аргументы на флаги (все, что начинается с '-') и возможные пути
 	var show_all: bool = false       # -a
@@ -242,7 +418,7 @@ func execute_ls(args: Array) -> void:
 			if "l" in arg: long_format = true
 			if "h" in arg: human_readable = true
 	
-	var files: PackedStringArray = zip_reader.get_files()
+	var files: Array = get_live_files()
 	
 	var current_parts: Array = []
 	if current_dir != "~":
@@ -286,22 +462,23 @@ func execute_ls(args: Array) -> void:
 		else:
 			full_item_path = current_dir.trim_prefix("~/") + "/" + item
 			
-		var is_dir = false
+		var is_dir = is_vfs_dir(full_item_path + "/")
 		# Если это директория, в архиве может быть запись с слэшем на конце
 		if zip_reader.file_exists(full_item_path + "/"):
 			is_dir = true
 		
 		if long_format:
+			var meta := get_node_meta(full_item_path)
 			var type_char = "d" if is_dir else "-"
 			var permissions = type_char + "rwxr-xr-x" if is_dir else type_char + "rw-r--r--"
 			var size_str = "0"
 			
-			var date_str = get_file_time()
+			var date_str = format_time(meta.mtime)
 			
 			if is_dir:
 				var folder_size = 0
 				var prefix_to_match = full_item_path + "/"
-				for f in zip_reader.get_files():
+				for f in get_live_files():
 					if f.begins_with(prefix_to_match):
 						var content = zip_reader.read_file(f)
 						if content.size() > 0:
@@ -322,7 +499,7 @@ func execute_ls(args: Array) -> void:
 				else:
 					size_str = str(real_size)
 					
-			output_string += "%s  1 %s %s  %s %s %s\n" % [permissions, username, username, size_str.lpad(6), date_str, item]
+			output_string += "%s %s %s %s %s %s\n" % [permissions, meta.owner, meta.group, size_str.lpad(6), date_str, item]
 		else:
 			output_string += item + "  "
 
@@ -341,29 +518,11 @@ func format_human_size(bytes: int) -> String:
 	else:
 		return "%.1fM" % (bytes / (1024.0 * 1024.0))
 	
-# Функция для получения форматированной даты файла
-func get_file_time() -> String:
-	if vfs_path.is_empty() or not FileAccess.file_exists(vfs_path):
-		return "Файл не найден"
-	
-	# Получаем время создания (в Unix-формате, в секундах)
-	var unix_time: int = FileAccess.get_modified_time(vfs_path)
-	
-	# Переводим секунды в читаемую дату и время (с учетом часового пояса)
-	var dt: Dictionary = Time.get_datetime_dict_from_unix_time(unix_time)
-	
-	return "%04d-%02d-%02d %02d:%02d:%02d" % [
-		dt.year, dt.month, dt.day,
-		dt.hour, dt.minute, dt.second
-	]
-	
 
 func is_vfs_dir(target_zip_prefix: String) -> bool:
-	var files: PackedStringArray = zip_reader.get_files()
-	for file_puth in files:
+	for file_puth in get_live_files():
 		if file_puth.begins_with(target_zip_prefix):
 			return true
-			break
 	return false
 
 func expand_env_vars(input_text: String) -> String:
