@@ -1,0 +1,23 @@
+# Stage 5 startup script: help, chown, rmdir (success cases)
+help
+ls -l
+
+# chown: owner only, group only, both, several files, env variable
+chown root root.txt
+ls -l
+chown :root root.txt
+chown misha:misha root.txt
+chown $USER root.txt
+chown root:root docs
+cd docs
+chown root a.txt b.txt
+ls -l
+cd ..
+
+# rmdir: empty dir, then a chain of nested empty dirs (deepest first)
+rmdir empty
+ls
+rmdir nest/inner/deep
+rmdir nest/inner
+rmdir nest
+ls -a
